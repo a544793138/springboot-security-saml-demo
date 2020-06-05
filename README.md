@@ -17,8 +17,9 @@ Springboot + Spring Security SAML(独立扩展库) demo
 - 点击**单点登出**，则跳转到 http://localhost:8080/saml/logout ，经过系统会跳转到 http://localhost:8080/saml/SingleLogout，到 IDP 登出。
 2. 登出后将会返回 http://localhost:8080/
 
-> 本地登出：直接退出本地的 session，但是没有在 IDP 那边退出，所以当再次登录时，在 IDP 无需再次输入用户、密码，直接进行登录。
-> 单点登出：在 IDP 那边退出，所以当再次登录时，在 IDP 那边需要输入用户、密码，才能进行登录。
+> **本地登出**：直接退出本地的 session，但是没有在 IDP 那边退出，所以当再次登录时，在 IDP 无需再次输入用户、密码，直接进行登录。
+>
+> **单点登出**：在 IDP 那边退出，所以当再次登录时，在 IDP 那边需要输入用户、密码，才能进行登录。
 
 ## OKTA IDP 设置流程
 
