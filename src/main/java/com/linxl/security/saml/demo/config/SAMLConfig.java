@@ -3,26 +3,23 @@ package com.linxl.security.saml.demo.config;
 
 import com.linxl.security.saml.demo.certificate.KeystoreFactory;
 import com.linxl.security.saml.demo.saml.SAMLUserDetailsServiceImpl;
-import com.linxl.security.saml.demo.saml.SpringResourceWrapperOpenSAMLResource;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.MultiThreadedHttpConnectionManager;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.velocity.app.VelocityEngine;
 import org.opensaml.saml2.metadata.provider.ResourceBackedMetadataProvider;
+import org.opensaml.util.resource.FilesystemResource;
+import org.opensaml.util.resource.Resource;
 import org.opensaml.xml.parse.StaticBasicParserPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.AutoConfigureBefore;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.saml.*;
-import org.springframework.security.saml.key.JKSKeyManager;
 import org.springframework.security.saml.key.KeyManager;
 import org.springframework.security.saml.metadata.*;
 import org.springframework.security.saml.processor.*;
@@ -35,22 +32,29 @@ import org.springframework.security.web.authentication.SimpleUrlAuthenticationFa
 import org.springframework.security.web.authentication.logout.LogoutHandler;
 import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
 import org.springframework.security.web.authentication.logout.SimpleUrlLogoutSuccessHandler;
+import org.springframework.util.ResourceUtils;
 
-import java.security.KeyStore;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Timer;
-import java.util.stream.Stream;
 
-@AutoConfigureBefore(WebSecurityConfig.class)
 @Configuration
+@EnableConfigurationProperties(SamlProperties.class)
 public class SAMLConfig {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SAMLConfig.class);
 
+    private final SAMLUserDetailsServiceImpl samlUserDetailsServiceImpl;
+
+    private final SamlProperties samlProperties;
+
     @Autowired
-    private SAMLUserDetailsServiceImpl samlUserDetailsServiceImpl;
+    public SAMLConfig(SAMLUserDetailsServiceImpl samlUserDetailsServiceImpl, SamlProperties samlProperties) {
+        this.samlUserDetailsServiceImpl = samlUserDetailsServiceImpl;
+        this.samlProperties = samlProperties;
+    }
 
     @Bean
     public SAMLAuthenticationProvider samlAuthenticationProvider() {
@@ -135,36 +139,32 @@ public class SAMLConfig {
     }
 
     @Bean
-    BeanFactoryPostProcessor idpMetadataLoader() {
-        return beanFactory -> {
-            PathMatchingResourcePatternResolver metadataFilesResolver = new PathMatchingResourcePatternResolver();
-            try {
-                Resource[] idpMetadataFiles = metadataFilesResolver.getResources("classpath:/idp-*.xml");
-                Stream.of(idpMetadataFiles).forEach(idpMetadataFile -> {
-                    try {
-                        Timer refreshTimer = new Timer(true);
-                        // 用于静态元数据的类
-                        ResourceBackedMetadataProvider delegate = null;
-                        delegate = new ResourceBackedMetadataProvider(refreshTimer, new SpringResourceWrapperOpenSAMLResource(idpMetadataFile));
-                        delegate.setParserPool(parserPool());
-                        ExtendedMetadata extendedMetadata = extendedMetadata().clone();
-                        ExtendedMetadataDelegate provider = new ExtendedMetadataDelegate(delegate, extendedMetadata);
-                        provider.setMetadataTrustCheck(true);
-                        provider.setMetadataRequireSignature(false);
-                        String idpFileName = idpMetadataFile.getFilename();
-                        String idpName = idpFileName.substring(idpFileName.lastIndexOf("idp-") + 4, idpFileName.lastIndexOf(".xml"));
-                        extendedMetadata.setAlias(idpName);
-                        // 配置 IDP 元数据的 provider
-                        beanFactory.registerSingleton(idpName, provider);
-                        LOGGER.info("Loaded Idp Metadata bean {}: {}", idpName, idpMetadataFile);
-                    } catch (Exception e) {
-                        throw new IllegalStateException("Unable to initialize IDP Metadata", e);
-                    }
-                });
-            } catch (Exception e) {
-                throw new IllegalStateException("Unable to initialize IDP Metadata", e);
-            }
-        };
+    public ExtendedMetadataDelegate idpMetadataLoader() {
+
+        if (StringUtils.isBlank(samlProperties.getIdpXml()) || !samlProperties.getIdpXml().endsWith(".xml")) {
+            throw new IllegalArgumentException("demo.saml.idp-xml must not be null or empty and must be a xml file.");
+        }
+
+        try {
+            final File file = ResourceUtils.getFile(samlProperties.getIdpXml());
+            Resource idpResource = new FilesystemResource(file.getPath());
+
+            Timer refreshTimer = new Timer(true);
+            ResourceBackedMetadataProvider delegate;
+            delegate = new ResourceBackedMetadataProvider(refreshTimer, idpResource);
+            delegate.setParserPool(parserPool());
+            ExtendedMetadata extendedMetadata = extendedMetadata().clone();
+            ExtendedMetadataDelegate provider = new ExtendedMetadataDelegate(delegate, extendedMetadata);
+            provider.setMetadataTrustCheck(true);
+            provider.setMetadataRequireSignature(false);
+            String idpName = file.getName().replaceAll(".xml", "");
+            extendedMetadata.setAlias(idpName);
+            // 配置 IDP 元数据的 provider
+            LOGGER.info("Loaded Idp Metadata bean {}: {}", idpName, file.getPath());
+            return provider;
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to initialize IDP Metadata", e);
+        }
     }
 
     // 额外的元数据
@@ -193,7 +193,7 @@ public class SAMLConfig {
         return generator;
     }
 
-    @Bean(name = "samlWebSSOProcessingFilter")
+    @Bean
     public SAMLProcessingFilter samlWebSSOProcessingFilter() throws Exception {
         SAMLProcessingFilter filter = new SAMLProcessingFilter();
         filter.setAuthenticationManager(authenticationManager());
@@ -228,7 +228,7 @@ public class SAMLConfig {
         return handler;
     }
 
-        // 用于配置多个 IDP
+    // 用于配置多个 IDP
 //    @Bean
 //    public SAMLDiscovery samlIDPDiscovery() {
 //        SAMLDiscovery filter = new SAMLDiscovery();
@@ -250,14 +250,32 @@ public class SAMLConfig {
     }
 
     @Bean
-    public KeystoreFactory keystoreFactory(ResourceLoader resourceLoader) {
-        return new KeystoreFactory(resourceLoader);
+    public KeystoreFactory keystoreFactory() {
+        return new KeystoreFactory();
     }
 
     @Bean
     public KeyManager keyManager(KeystoreFactory keystoreFactory) throws Exception {
-        KeyStore keystore = keystoreFactory.loadKeystore("classpath:/localhost.cert", "classpath:/localhost.key.der", "localhost", "");
-        return new JKSKeyManager(keystore, Collections.singletonMap("localhost", ""), "localhost");
+        LOGGER.debug("Start to initialize KeyManager for SAML.");
+        LOGGER.debug("Check demo.saml.public-key-cert and demo.saml.private-key-cert.");
+        if (samlProperties.useCerts()) {
+            LOGGER.debug("find demo.saml.public-key-cert and demo.saml.private-key-cert.");
+            LOGGER.debug("Use demo.saml.public-key-cert and demo.saml.private-key-cert to initialize KeyManager.");
+            return keystoreFactory.getJKSKeyManager(samlProperties.getPublicKeyCert(), samlProperties.getPrivateKeyCert());
+        }
+        LOGGER.debug("Can't find demo.saml.public-key-cert and demo.saml.private-key-cert.");
+        LOGGER.debug("Check demo.saml.key-store and demo.saml.key-alias.");
+        if (samlProperties.useKeyStore()) {
+            LOGGER.debug("find demo.saml.key-store and demo.saml.key-alias.");
+            try {
+                return keystoreFactory.getJKSKeyManager(samlProperties.getKeyStore(), samlProperties.getKeyStorePassword(),
+                        samlProperties.getKeyPassword());
+            } catch (Exception e) {
+                throw new IllegalStateException("Unable to initialize KeyManager with keyStore: " + samlProperties.getKeyStore(), e);
+            }
+        }
+        LOGGER.debug("Can't find demo.saml.key-store and demo.saml.key-alias.");
+        throw new IllegalArgumentException("Unable to initialize KeyManager because no parameters available.");
     }
 
     @Bean
